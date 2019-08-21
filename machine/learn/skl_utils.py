@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import os
 import json
 import itertools
-from sklearn.metrics import SCORERS, roc_curve, auc, make_scorer, confusion_matrix
+from sklearn.metrics import SCORERS, roc_curve, auc, make_scorer, confusion_matrix, roc_auc_score
 from sklearn.model_selection import GridSearchCV, cross_validate, train_test_split, StratifiedKFold
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, LabelEncoder
 from sklearn.compose import ColumnTransformer
@@ -192,8 +192,7 @@ def generate_results(model, input_data,
             scoring = ["balanced_accuracy",
                         "precision",
                         "recall",
-                        "f1",
-                        "roc_auc"]
+                        "f1"]
 
         metric = "accuracy"
     else:
@@ -323,7 +322,9 @@ def generate_results(model, input_data,
 
 
         if num_classes==2:
-            plot_roc_curve(tmpdir, _id, features, target, cv_scores, figure_export)
+            mean_auc, t_mean_auc = plot_roc_curve(tmpdir, _id, features, target, cv_scores, figure_export)
+            scores['roc_auc_score'] = mean_auc
+            scores['train_roc_auc_score'] = t_mean_auc
 
 
     metrics_dict = {'_scores': scores}
@@ -520,21 +521,31 @@ def plot_roc_curve(tmpdir, _id, X, y, cv_scores, figure_export):
         If true, then export roc curve plot
     Returns
     -------
-    None
+    mean_auc: str or float
+        Average AUC in test set or return "not available"
+        if the AUC score cannot be estimated.
+    t_mean_auc: str or float
+        Average AUC in training set or return "not available"
+        if the AUC score cannot be estimated.
     """
     from scipy import interp
     cv = StratifiedKFold(n_splits=10)
     tprs = []
     aucs = []
     mean_fpr = np.linspace(0, 1, 100)
-
+    # check if AUC/ROC is available
+    ifroc = True
+    # for training auc score
+    t_tprs = []
     #print(cv_scores['train_roc_auc'])
     for cv_split, est in zip(cv.split(X, y), cv_scores['estimator']):
         train, test = cv_split
         try:
             probas_ = est.predict_proba(X[test])[:, 1]
+            t_probas_ = est.predict_proba(X[train])[:, 1]
         except AttributeError:
             probas_ = est.decision_function(X[test])
+            t_probas_ = est.decision_function(X[train])
         #print(SCORERS['roc_auc'](est, X[train], y[train]))
         # Compute ROC curve and area the curve
 
@@ -542,44 +553,65 @@ def plot_roc_curve(tmpdir, _id, X, y, cv_scores, figure_export):
                                 [list(est.classes_).index(c)
                                  for c in y[test]], dtype=np.int
                                  )
-        fpr, tpr, thresholds = roc_curve(classes_encoded, probas_)
+        t_classes_encoded = np.array(
+                                [list(est.classes_).index(c)
+                                 for c in y[train]], dtype=np.int
+                                 )
+        try:
+            fpr, tpr, thresholds = roc_curve(classes_encoded, probas_)
+            t_fpr, t_tpr, _ = roc_curve(t_classes_encoded, t_probas_)
+
+        except:
+            ifroc = False
+            break
         tprs.append(interp(mean_fpr, fpr, tpr))
         tprs[-1][0] = 0.0
+        t_tprs.append(interp(mean_fpr, t_fpr, t_tpr))
+        t_tprs[-1][0] = 0.0
         roc_auc = auc(fpr, tpr)
         aucs.append(roc_auc)
         if figure_export:
             plt.plot(fpr, tpr, lw=1, alpha=0.3)
+    if ifroc:
+        # test score
+        mean_tpr = np.mean(tprs, axis=0)
+        mean_tpr[-1] = 1.0
+        mean_auc = auc(mean_fpr, mean_tpr)
+        # training score
+        t_mean_tpr = np.mean(t_tprs, axis=0)
+        t_mean_tpr[-1] = 1.0
+        t_mean_auc = auc(mean_fpr, t_mean_tpr)
 
-    mean_tpr = np.mean(tprs, axis=0)
-    mean_tpr[-1] = 1.0
-    mean_auc = auc(mean_fpr, mean_tpr)
-    std_auc = np.std(aucs)
-    std_tpr = np.std(tprs, axis=0)
-    tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
-    tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
-    if figure_export:
-        plt.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
-                 label='Chance', alpha=.8)
-        plt.plot(mean_fpr, mean_tpr, color='b',
-                 label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
-                 lw=2, alpha=.8)
-        plt.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2,
-                         label=r'$\pm$ 1 Standard Deviation')
-        plt.xlim([-0.05, 1.05])
-        plt.ylim([-0.05, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC curve')
-        plt.legend(loc="lower right")
-        plt.savefig(tmpdir + _id + '/roc_curve' + _id + '.png')
-        plt.close()
-    roc_curve_dict = {
-        'fpr': mean_fpr.tolist(),
-        'tpr': mean_tpr.tolist(),
-        'roc_auc_score': mean_auc
-    }
-    save_json_fmt(outdir=tmpdir, _id=_id,
-                  fname="roc_curve.json", content=roc_curve_dict)
+        std_auc = np.std(aucs)
+        std_tpr = np.std(tprs, axis=0)
+        tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
+        tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
+        if figure_export:
+            plt.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
+                     label='Chance', alpha=.8)
+            plt.plot(mean_fpr, mean_tpr, color='b',
+                     label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
+                     lw=2, alpha=.8)
+            plt.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2,
+                             label=r'$\pm$ 1 Standard Deviation')
+            plt.xlim([-0.05, 1.05])
+            plt.ylim([-0.05, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('ROC curve')
+            plt.legend(loc="lower right")
+            plt.savefig(tmpdir + _id + '/roc_curve' + _id + '.png')
+            plt.close()
+        roc_curve_dict = {
+            'fpr': mean_fpr.tolist(),
+            'tpr': mean_tpr.tolist(),
+            'roc_auc_score': mean_auc
+        }
+        save_json_fmt(outdir=tmpdir, _id=_id,
+                      fname="roc_curve.json", content=roc_curve_dict)
+        return mean_auc, t_mean_auc
+    else:
+        return "not available", "not available"
 
 
 def plot_imp_score(tmpdir, _id, coefs, feature_names, imp_score_type):
@@ -612,11 +644,12 @@ def plot_imp_score(tmpdir, _id, coefs, feature_names, imp_score_type):
     plt.title(imp_score_type)
     plt.barh(range(num_bar), coefs[indices], color="r", align="center")
     top_features = list(feature_names[indices])
-    plt.yticks(range(num_bar), feature_names[indices])
-    plt.ylim([-1, num_bar])
-    h.tight_layout()
-    plt.savefig(tmpdir + _id + '/imp_score' + _id + '.png')
-    plt.close()
+    if np.count_nonzero(coefs) != 0: # importance is all 0
+        plt.yticks(range(num_bar), feature_names[indices])
+        plt.ylim([-1, num_bar])
+        h.tight_layout()
+        plt.savefig(tmpdir + _id + '/imp_score' + _id + '.png')
+        plt.close()
     return top_features, indices
 
 

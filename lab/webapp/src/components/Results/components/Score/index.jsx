@@ -14,7 +14,7 @@ function Score({ scoreName, scoreValue, chartKey, chartColor, scoreValueList }) 
     if(typeof(scoreValue) !== 'number' && !scoreValueList.length) {
       if (scoreName.includes('AUC') ) {
         return (
-          <Header inverted size="tiny" content={`${scoreName} is only available for binary classification.`} />
+          <Header inverted size="tiny" content={`${scoreName} is not available.`} />
         );
       } else {
         return (

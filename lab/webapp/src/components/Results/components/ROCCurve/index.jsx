@@ -18,11 +18,11 @@ class ROCCurve extends Component {
         .then(response => {
           if(response.status >= 400) {
             throw new Error(`${response.status}: ${response.statusText}`);
-          }  
+          }
           return response.blob();
         })
-        .then(blob => this.setState({ 
-          image_url: URL.createObjectURL(blob) 
+        .then(blob => this.setState({
+          image_url: URL.createObjectURL(blob)
         }));
     }
   }
@@ -33,7 +33,7 @@ class ROCCurve extends Component {
 
     if(!file) {
       return (
-        <Header inverted size="tiny" content="ROC curve only available for binary classification." />
+        <Header inverted size="tiny" content="ROC curve is not available." />
       );
     }
 
